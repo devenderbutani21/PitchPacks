@@ -1,0 +1,106 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer utilities {
+  /* Stadium radial background */
+  .stadium-gradient {
+    background: radial-gradient(circle at 50% 0%, #1e40af 0%, #020617 70%);
+  }
+
+  /* Bento components styling */
+  .bento-cell {
+    background: rgba(30, 41, 59, 0.45);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 1.5rem;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .bento-cell:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(30, 41, 59, 0.55);
+  }
+
+  /* Rarity glow effects */
+  .card-glow-gold {
+    box-shadow: 0 0 25px rgba(234, 179, 8, 0.25);
+    border: 1px solid rgba(234, 179, 8, 0.45);
+  }
+
+  .card-glow-silver {
+    box-shadow: 0 0 18px rgba(148, 163, 184, 0.15);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+  }
+
+  .card-glow-purple {
+    box-shadow: 0 0 22px rgba(168, 85, 247, 0.25);
+    border: 1px solid rgba(168, 85, 247, 0.45);
+  }
+
+  /* Premium digital card metallic and shining effects */
+  .shine-effect {
+    position: relative;
+    overflow: hidden;
+  }
+  .shine-effect::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -60%;
+    width: 30%;
+    height: 200%;
+    background: rgba(255, 255, 255, 0.13);
+    transform: rotate(30deg);
+    transition: none;
+    pointer-events: none;
+    animation: packShine 4s infinite linear;
+  }
+
+  @keyframes packShine {
+    0% { left: -150%; }
+    100% { left: 150%; }
+  }
+
+  /* Custom glassmorphism details */
+  .glass-card {
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* Custom styled scrollbar matching the premium sports aesthetic */
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(59, 130, 246, 0.3) rgba(15, 23, 42, 0.3);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.3);
+    border-radius: 9999px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(59, 130, 246, 0.3);
+    border-radius: 9999px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    transition: background 0.2s ease;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(59, 130, 246, 0.6);
+  }
+}
+

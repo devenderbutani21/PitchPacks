@@ -1,0 +1,6 @@
+{
+  "name": "PitchPacks: The Live Squad Ledger",
+  "description": "A dynamic digital football card collecting application featuring Argentina and Spain national squads, active packs, live performance ratings, and simulated match event ledgers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
