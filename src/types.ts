@@ -49,3 +49,20 @@ export interface Pack {
   cost: number;
   wasOpened: boolean;
 }
+
+export interface PlayerBet {
+  id: string;
+  cardId: string;
+  playerId: string;
+  type: 'exact' | 'range';
+  targetRank?: number; // 1-22
+  rangeStart?: number; // 1-22
+  rangeEnd?: number; // 1-22
+  betAmount: number;
+  multiplier: number;
+  placedAtMinute: number;
+  status: 'pending' | 'won' | 'lost';
+  actualFinalRank?: number;
+  payoutAmount?: number;
+}
+

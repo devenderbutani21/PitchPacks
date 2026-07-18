@@ -23,10 +23,17 @@ import {
   History,
   Trash2,
   CheckCircle,
-  Award
+  Award,
+  Sliders,
+  XCircle,
+  AlertCircle,
+  X,
+  Check,
+  ChevronRight,
+  SlidersHorizontal
 } from 'lucide-react';
 import { ALL_PLAYERS, PLAYER_MAP, MATCH_EVENT_TEMPLATES } from './data';
-import { CollectedCard, MatchEvent, Player, Rarity, Position, Nation } from './types';
+import { CollectedCard, MatchEvent, Player, Rarity, Position, Nation, PlayerBet } from './types';
 
 // Helper to generate standard stats block
 const getPositionColor = (pos: Position) => {
@@ -225,6 +232,169 @@ export default function App() {
     }, 1800);
   };
 
+  // Betting states
+  const [activeBets, setActiveBets] = useState<PlayerBet[]>(() => {
+    const saved = localStorage.getItem('pitchpacks_active_bets');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { return []; }
+    }
+    return [];
+  });
+
+  const [resolvedBets, setResolvedBets] = useState<PlayerBet[]>(() => {
+    const saved = localStorage.getItem('pitchpacks_resolved_bets');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { return []; }
+    }
+    return [];
+  });
+
+  const [settledBetsDisplay, setSettledBetsDisplay] = useState<PlayerBet[] | null>(null);
+
+  // Sync to local storage
+  useEffect(() => {
+    localStorage.setItem('pitchpacks_active_bets', JSON.stringify(activeBets));
+  }, [activeBets]);
+
+  useEffect(() => {
+    localStorage.setItem('pitchpacks_resolved_bets', JSON.stringify(resolvedBets));
+  }, [resolvedBets]);
+
+  // Betting form states
+  const [betSelectedCardId, setBetSelectedCardId] = useState<string>('');
+  const [betType, setBetType] = useState<'exact' | 'range'>('exact');
+  const [betTargetRank, setBetTargetRank] = useState<number>(1);
+  const [betRangeStart, setBetRangeStart] = useState<number>(1);
+  const [betRangeEnd, setBetRangeEnd] = useState<number>(5);
+  const [betAmount, setBetAmount] = useState<string>('10');
+  const [betError, setBetError] = useState<string>('');
+  const [betDeskTab, setBetDeskTab] = useState<'odds' | 'active' | 'history'>('odds');
+  const [oddsFormat, setOddsFormat] = useState<'decimal' | 'american'>('decimal');
+  const [oddsFilterMode, setOddsFilterMode] = useState<'all' | 'owned'>('all');
+
+  // Betting & Odds formatting helpers
+  const getAmericanOdds = (decimalOdds: number): string => {
+    if (decimalOdds >= 2.0) {
+      const value = Math.round((decimalOdds - 1) * 100);
+      return `+${value}`;
+    } else {
+      const value = Math.round(-100 / (decimalOdds - 1));
+      return `${value}`;
+    }
+  };
+
+  const formatOdds = (decimalOdds: number, format: 'decimal' | 'american') => {
+    if (format === 'decimal') {
+      return `${decimalOdds.toFixed(2)}x`;
+    } else {
+      return getAmericanOdds(decimalOdds);
+    }
+  };
+
+  const getBetMarketLabel = (bet: { type: 'exact' | 'range'; targetRank?: number; rangeStart?: number; rangeEnd?: number }) => {
+    if (bet.type === 'exact') {
+      if (bet.targetRank === 1) return '🏆 Golden Form Winner (#1)';
+      return `🎯 Exact Rank #${bet.targetRank}`;
+    } else {
+      if (bet.rangeStart === 1 && bet.rangeEnd === 3) return '🥈 Podium Finish (Top 3)';
+      if (bet.rangeStart === 1 && bet.rangeEnd === 5) return '⭐️ Top 5 Finish';
+      if (bet.rangeStart === 1 && bet.rangeEnd === 11) return '🛡️ Upper Half (Top 11)';
+      return `↕️ Rank Range #${bet.rangeStart} to #${bet.rangeEnd}`;
+    }
+  };
+
+  const handlePlaceBet = () => {
+    setBetError('');
+    if (!betSelectedCardId) {
+      setBetError('Please select a player to bet on.');
+      return;
+    }
+    let card = collection.find(c => c.id === betSelectedCardId);
+    if (!card) {
+      const liveP = livePlayers.find(lp => lp.id === betSelectedCardId);
+      if (liveP) {
+        card = {
+          id: liveP.id,
+          playerId: liveP.id,
+          rating: liveP.rating,
+          recentEvents: [],
+          obtainedAt: new Date().toISOString()
+        };
+      }
+    }
+    if (!card) {
+      setBetError('Selected player card not found.');
+      return;
+    }
+
+    const parsedAmount = parseFloat(betAmount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      setBetError('Please enter a valid bet amount.');
+      return;
+    }
+    if (parsedAmount > balance) {
+      setBetError(`Insufficient funds. Your balance is $${balance.toFixed(2)}.`);
+      return;
+    }
+
+    if (liveMatchTime >= 75) {
+      setBetError('🕒 Betting is closed after the 75th minute!');
+      return;
+    }
+
+    if (betType === 'range' && betRangeStart > betRangeEnd) {
+      setBetError('Min rank cannot be greater than Max rank.');
+      return;
+    }
+
+    // Calculate multiplier
+    let multiplier = 15.00;
+    if (betType === 'range') {
+      const size = Math.max(1, betRangeEnd - betRangeStart + 1);
+      multiplier = parseFloat((22 / size).toFixed(2));
+      multiplier = Math.max(1.2, Math.min(15, multiplier));
+    }
+
+    const newBet: PlayerBet = {
+      id: `bet-${Date.now()}-${Math.random()}`,
+      cardId: card.id,
+      playerId: card.playerId,
+      type: betType,
+      targetRank: betType === 'exact' ? betTargetRank : undefined,
+      rangeStart: betType === 'range' ? betRangeStart : undefined,
+      rangeEnd: betType === 'range' ? betRangeEnd : undefined,
+      betAmount: parsedAmount,
+      multiplier,
+      placedAtMinute: liveMatchTime,
+      status: 'pending'
+    };
+
+    // Deduct balance
+    setBalance(prev => {
+      const newBal = prev - parsedAmount;
+      localStorage.setItem('pitchpacks_balance', newBal.toFixed(2));
+      return newBal;
+    });
+
+    // Add to active bets
+    setActiveBets(prev => [...prev, newBet]);
+
+    const player = PLAYER_MAP[card.playerId];
+    if (player) {
+      addLog(
+        `📈 Bet Placed: $${parsedAmount.toFixed(2)} on ${player.name} (${getBetMarketLabel(newBet)}) at odds of ${formatOdds(multiplier, 'decimal')}.`,
+        'BET_PLACE',
+        `${player.nation === 'Spain' ? 'ESP' : 'ARG'}_${getPlayerSymbol(player.name)}`,
+        '-',
+        `-$${parsedAmount.toFixed(2)}`,
+        'negative'
+      );
+    }
+    
+    // Clear selection or amount if desired, or keep to show active state
+    setBetError('');
+  };
+
   // SPAIN STARTERS
   const SPAIN_STARTERS = [
     { key: 'LW', playerId: 'es-21' }, // Nico Williams
@@ -299,6 +469,115 @@ export default function App() {
     const liveP = livePlayers.find(p => p.id === playerId);
     return liveP ? liveP.rating : cardRating;
   };
+
+  const resolveAllActiveBets = () => {
+    if (activeBets.length === 0) return;
+
+    const sortedFinalPlayers = [...livePlayers].sort((a, b) => b.rating - a.rating);
+    const finalRanksMap = new Map<string, number>();
+    sortedFinalPlayers.forEach((p, idx) => {
+      finalRanksMap.set(p.id, idx + 1);
+    });
+
+    let totalPayout = 0;
+    const resolved = activeBets.map(bet => {
+      const finalRank = finalRanksMap.get(bet.playerId);
+      if (finalRank === undefined) {
+        return {
+          ...bet,
+          status: 'lost' as const,
+          actualFinalRank: 22,
+          payoutAmount: 0
+        };
+      }
+
+      let isWin = false;
+      if (bet.type === 'exact') {
+        isWin = finalRank === bet.targetRank;
+      } else {
+        isWin = finalRank >= bet.rangeStart! && finalRank <= bet.rangeEnd!;
+      }
+
+      const player = PLAYER_MAP[bet.playerId];
+      const name = player ? player.name : 'Unknown Player';
+
+      if (isWin) {
+        const payout = parseFloat((bet.betAmount * bet.multiplier).toFixed(2));
+        totalPayout += payout;
+
+        if (player) {
+          const tickerSymbol = `${player.nation === 'Spain' ? 'ESP' : 'ARG'}_${getPlayerSymbol(player.name)}`;
+          addLog(
+            `🎉 Bet Won! ${name} finished at Rank #${finalRank}. Paid $${payout.toFixed(2)} (${bet.multiplier}x)`,
+            'BET_WIN',
+            tickerSymbol,
+            finalRank,
+            `+$${payout.toFixed(2)}`,
+            'positive'
+          );
+        }
+
+        return {
+          ...bet,
+          status: 'won' as const,
+          actualFinalRank: finalRank,
+          payoutAmount: payout
+        };
+      } else {
+        if (player) {
+          const tickerSymbol = `${player.nation === 'Spain' ? 'ESP' : 'ARG'}_${getPlayerSymbol(player.name)}`;
+          addLog(
+            `💸 Bet Lost! ${name} finished at Rank #${finalRank} (Bet was #${bet.type === 'exact' ? bet.targetRank : bet.rangeStart + '-' + bet.rangeEnd}).`,
+            'BET_LOSE',
+            tickerSymbol,
+            finalRank,
+            `-$${bet.betAmount.toFixed(2)}`,
+            'negative'
+          );
+        }
+
+        return {
+          ...bet,
+          status: 'lost' as const,
+          actualFinalRank: finalRank,
+          payoutAmount: 0
+        };
+      }
+    });
+
+    // Update balance
+    if (totalPayout > 0) {
+      setBalance(prev => {
+        const newBal = prev + totalPayout;
+        localStorage.setItem('pitchpacks_balance', newBal.toFixed(2));
+        return newBal;
+      });
+    }
+
+    // Stop auto-simulation so user sees the settlement
+    setAutoSimulate(false);
+
+    // Save to resolved history
+    setResolvedBets(prev => {
+      const updated = [...resolved, ...prev].slice(0, 50);
+      localStorage.setItem('pitchpacks_resolved_bets', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Display the settled bets overlay/modal
+    setSettledBetsDisplay(resolved);
+
+    // Clear active bets
+    setActiveBets([]);
+    localStorage.removeItem('pitchpacks_active_bets');
+  };
+
+  // Trigger bet resolution when match finishes
+  useEffect(() => {
+    if (liveMatchTime >= 90 && activeBets.length > 0) {
+      resolveAllActiveBets();
+    }
+  }, [liveMatchTime, activeBets]);
 
   // Track sorted ratings for real-time ranking shifts
   useEffect(() => {
@@ -1707,11 +1986,11 @@ export default function App() {
         <section id="mid_panels_grid" className="w-full">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-stretch">
             
-            {/* LEFT/CENTER 2 COLS: LIVE MATCH STATUS WITH TWO PITCHES AND LEADERBOARD */}
-            <div className="lg:col-span-2 flex flex-col space-y-6">
+            {/* LEFT/CENTER 2 COLS: LIVE MATCH STATUS WITH TWO PITCHES */}
+            <div className="lg:col-span-2 flex flex-col">
               
               {/* LIVE MATCH STATUS DASHBOARD */}
-              <div className="bento-cell p-5 flex flex-col relative overflow-hidden shadow-2xl">
+              <div className="bento-cell p-5 flex flex-col relative overflow-hidden shadow-2xl h-auto lg:h-[580px]">
                 <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
                 
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/5 pb-3 mb-4">
@@ -1776,15 +2055,16 @@ export default function App() {
                 </div>
 
                 {/* TWO PITCHES SIDE-BY-SIDE */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
-                  
-                  {/* SPAIN FIELD */}
-                  <div className="relative bg-gradient-to-b from-emerald-900 via-emerald-800 to-emerald-950 border border-emerald-500/20 rounded-2xl p-3 overflow-hidden h-[460px] shadow-lg flex flex-col justify-between">
-                    {/* Stadium vertical cut grass lawn mower visual lines */}
-                    <div className="absolute inset-0 bg-[repeating-linear-gradient(0deg,rgba(0,0,0,0.04)_0px,rgba(0,0,0,0.04)_50px,rgba(255,255,255,0.01)_50px,rgba(255,255,255,0.01)_100px)] pointer-events-none" />
+                <div className="flex-1 overflow-y-auto lg:overflow-visible min-h-0">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch h-full">
                     
-                    {/* Field Markings */}
-                    <div className="absolute inset-x-0 top-0 h-[460px] border border-white/10 rounded-2xl pointer-events-none z-0">
+                    {/* SPAIN FIELD */}
+                    <div className="relative bg-gradient-to-b from-emerald-900 via-emerald-800 to-emerald-950 border border-emerald-500/20 rounded-2xl p-3 overflow-hidden h-[430px] lg:h-full shadow-lg flex flex-col justify-between">
+                      {/* Stadium vertical cut grass lawn mower visual lines */}
+                      <div className="absolute inset-0 bg-[repeating-linear-gradient(0deg,rgba(0,0,0,0.04)_0px,rgba(0,0,0,0.04)_50px,rgba(255,255,255,0.01)_50px,rgba(255,255,255,0.01)_100px)] pointer-events-none" />
+                      
+                      {/* Field Markings */}
+                      <div className="absolute inset-x-0 top-0 h-[430px] lg:h-full border border-white/10 rounded-2xl pointer-events-none z-0">
                       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-36 h-14 border-b border-x border-white/15" />
                       <div className="absolute top-14 left-1/2 -translate-x-1/2 w-16 h-8 border-b border-x border-white/15 rounded-b-full" />
                       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-20 h-4 border-b border-x border-white/25 bg-slate-950/40" />
@@ -1968,13 +2248,13 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* ARGENTINA FIELD */}
-                  <div className="relative bg-gradient-to-b from-emerald-900 via-emerald-800 to-emerald-950 border border-emerald-500/20 rounded-2xl p-3 overflow-hidden h-[460px] shadow-lg flex flex-col justify-between">
-                    {/* Stadium vertical cut grass lawn mower visual lines */}
-                    <div className="absolute inset-0 bg-[repeating-linear-gradient(0deg,rgba(0,0,0,0.04)_0px,rgba(0,0,0,0.04)_50px,rgba(255,255,255,0.01)_50px,rgba(255,255,255,0.01)_100px)] pointer-events-none" />
-                    
-                    {/* Field Markings */}
-                    <div className="absolute inset-x-0 top-0 h-[460px] border border-white/10 rounded-2xl pointer-events-none z-0">
+                    {/* ARGENTINA FIELD */}
+                    <div className="relative bg-gradient-to-b from-emerald-900 via-emerald-800 to-emerald-950 border border-emerald-500/20 rounded-2xl p-3 overflow-hidden h-[430px] lg:h-full shadow-lg flex flex-col justify-between">
+                      {/* Stadium vertical cut grass lawn mower visual lines */}
+                      <div className="absolute inset-0 bg-[repeating-linear-gradient(0deg,rgba(0,0,0,0.04)_0px,rgba(0,0,0,0.04)_50px,rgba(255,255,255,0.01)_50px,rgba(255,255,255,0.01)_100px)] pointer-events-none" />
+                      
+                      {/* Field Markings */}
+                      <div className="absolute inset-x-0 top-0 h-[430px] lg:h-full border border-white/10 rounded-2xl pointer-events-none z-0">
                       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-36 h-14 border-b border-x border-white/15" />
                       <div className="absolute top-14 left-1/2 -translate-x-1/2 w-16 h-8 border-b border-x border-white/15 rounded-b-full" />
                       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-20 h-4 border-b border-x border-white/25 bg-slate-950/40" />
@@ -2160,100 +2440,1241 @@ export default function App() {
 
                 </div>
               </div>
+              </div>
+            </div>
+            
+            {/* RIGHT COLUMN: LIVE SPECULATION DESK */}
+            <div className="lg:col-span-1 flex flex-col">
+              
+              {/* LOWER SECTION: LIVE PLAYER RANK PREDICTION DESK */}
+              <div className="bento-cell p-4 flex flex-col h-auto lg:h-[580px] shadow-2xl overflow-hidden relative">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-2xl pointer-events-none" />
+                
+                {/* Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-white/5 pb-2.5 mb-3 shrink-0 gap-2">
+                  <div className="flex items-center space-x-2">
+                    <Coins className="w-4 h-4 text-amber-400" />
+                    <div>
+                      <h3 className="text-xs font-bold font-display text-slate-100">Live Speculation Desk</h3>
+                      <p className="text-[8px] font-mono text-slate-400 uppercase tracking-wider">Live Odds & Bet Slips</p>
+                    </div>
+                  </div>
 
-              {/* LIVE PLAYER RANKINGS BOARD */}
-              <div className="bg-slate-950/60 border border-white/5 rounded-xl p-3 mt-4">
-                <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/5">
-                  <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">🏆 Live Player Rankings</span>
-                  <span className="text-[8px] font-mono text-slate-500">Sorted by Live Form Performance</span>
+                  <div className="flex items-center space-x-2">
+                    {/* Odds Format Selector */}
+                    <div className="flex bg-slate-950 p-0.5 rounded border border-white/5 text-[7px] font-mono select-none">
+                      <button
+                        onClick={() => setOddsFormat('decimal')}
+                        className={`px-1.5 py-0.5 rounded transition-all duration-150 ${oddsFormat === 'decimal' ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                        DECIMAL
+                      </button>
+                      <button
+                        onClick={() => setOddsFormat('american')}
+                        className={`px-1.5 py-0.5 rounded transition-all duration-150 ${oddsFormat === 'american' ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                        AMERICAN
+                      </button>
+                    </div>
+
+                    {/* Sub-tabs */}
+                    <div className="flex space-x-1 bg-slate-950 p-0.5 rounded-lg border border-white/5 text-[9px] font-mono">
+                      <button
+                        onClick={() => {
+                          setBetDeskTab('odds');
+                          setBetSelectedCardId('');
+                        }}
+                        className={`px-2 py-1 rounded transition-all duration-150 ${betDeskTab === 'odds' ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
+                      >
+                        Odds
+                      </button>
+                      <button
+                        onClick={() => setBetDeskTab('active')}
+                        className={`px-2 py-1 rounded transition-all duration-150 relative ${betDeskTab === 'active' ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
+                      >
+                        Active ({activeBets.length})
+                      </button>
+                      <button
+                        onClick={() => {
+                          setBetDeskTab('history');
+                          setBetSelectedCardId('');
+                        }}
+                        className={`px-2 py-1 rounded transition-all duration-150 relative ${betDeskTab === 'history' ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
+                      >
+                        History
+                        {resolvedBets.length > 0 && (
+                          <span className="absolute -top-1 -right-1 bg-amber-400 border border-slate-950 text-slate-950 text-[7px] w-3.5 h-3.5 rounded-full flex items-center justify-center font-bold">
+                            {resolvedBets.length}
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 max-h-[110px] overflow-y-auto pr-1 custom-scrollbar">
-                  {[...livePlayers]
-                    .sort((a, b) => b.rating - a.rating)
-                    .map((liveP, idx) => {
-                      const p = PLAYER_MAP[liveP.id];
-                      if (!p) return null;
-                      const prevRankIdx = prevSortedIdsRef.current.indexOf(liveP.id);
-                      const rankDiff = prevRankIdx === -1 ? 0 : prevRankIdx - idx;
 
-                      return (
-                        <div key={liveP.id} className="bg-slate-900/60 border border-white/[0.03] rounded-lg p-1.5 flex items-center justify-between text-[10px]">
-                          <span className="text-[9px] font-mono text-slate-500 font-bold">#{idx+1}</span>
-                          <span className="font-bold text-slate-200 truncate ml-1">{p.name.split(' ').pop()} {p.nation === 'Spain' ? '🇪🇸' : '🇦🇷'}</span>
-                          <div className="flex items-center space-x-1 shrink-0 ml-1">
-                            <span className="font-mono text-amber-400 font-bold">{liveP.rating}</span>
-                            {rankDiff > 0 ? (
-                              <span className="text-[8px] text-emerald-400 font-bold">▲{rankDiff}</span>
-                            ) : rankDiff < 0 ? (
-                              <span className="text-[8px] text-rose-400 font-bold">▼{Math.abs(rankDiff)}</span>
-                            ) : null}
-                          </div>
+                {/* Sub-panels */}
+                {betDeskTab !== 'history' ? (
+                  <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
+                    
+                    {/* SECTION 1: LIVE ODDS BOARD */}
+                    {betDeskTab === 'odds' && (
+                      <div className="flex-1 flex flex-col min-h-0">
+                      
+                      {/* Filter Bar */}
+                      <div className="flex items-center justify-between text-[8px] font-mono uppercase tracking-wider text-slate-450 mb-2 font-bold bg-slate-900/40 p-2 rounded-xl border border-white/5">
+                        <span className="text-[8.5px] font-black text-slate-300">📊 Selection Base</span>
+                        <div className="flex space-x-1 select-none">
+                          <button
+                            type="button"
+                            onClick={() => setOddsFilterMode('all')}
+                            className={`px-2 py-0.5 rounded text-[7.5px] font-black uppercase transition-all duration-150 cursor-pointer ${
+                              oddsFilterMode === 'all'
+                                ? 'bg-amber-400 text-slate-950 font-black'
+                                : 'text-slate-500 hover:text-slate-300 bg-slate-950/40'
+                            }`}
+                          >
+                            All Match ({livePlayers.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOddsFilterMode('owned')}
+                            className={`px-2 py-0.5 rounded text-[7.5px] font-black uppercase transition-all duration-150 cursor-pointer ${
+                              oddsFilterMode === 'owned'
+                                ? 'bg-amber-400 text-slate-950 font-black'
+                                : 'text-slate-500 hover:text-slate-300 bg-slate-950/40'
+                            }`}
+                          >
+                            My Squad ({collection.filter(c => livePlayers.some(lp => lp.id === c.playerId)).length})
+                          </button>
                         </div>
-                      );
-                    })}
-                </div>
+                      </div>
+
+                      {(() => {
+                        const sortedMatchPlayers = [...livePlayers].sort((a, b) => b.rating - a.rating);
+                        const filteredLiveOdds = livePlayers
+                          .filter(lp => {
+                            if (oddsFilterMode === 'owned') {
+                              return collection.some(c => c.playerId === lp.id);
+                            }
+                            return true;
+                          })
+                          .map(lp => {
+                            const currentRank = sortedMatchPlayers.findIndex(x => x.id === lp.id) + 1;
+                            const ownedCard = collection.find(c => c.playerId === lp.id);
+                            return { lp, currentRank, ownedCard };
+                          })
+                          .sort((a, b) => a.currentRank - b.currentRank);
+
+                        if (filteredLiveOdds.length === 0) {
+                          return (
+                            <div className="text-[10px] text-slate-500 bg-slate-950/40 border border-dashed border-white/5 p-5 rounded-xl text-center font-medium my-auto">
+                              No matching collection cards currently in the active live squad.
+                              <p className="text-[8.5px] text-amber-400/80 mt-1.5 leading-relaxed">
+                                Open 1-Card Packs below to recruit players, or switch to 'All Match' above to speculate on anyone!
+                              </p>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-0.5 max-h-[340px] lg:max-h-[440px]">
+                            {filteredLiveOdds.map(({ lp, currentRank, ownedCard }) => {
+                              const p = PLAYER_MAP[lp.id];
+                              if (!p) return null;
+
+                              const targetCardId = ownedCard ? ownedCard.id : lp.id;
+                              const isThisCardSelected = betSelectedCardId === targetCardId;
+                              const isWinnerSelected = isThisCardSelected && betType === 'exact' && betTargetRank === 1;
+                              const isTop3Selected = isThisCardSelected && betType === 'range' && betRangeStart === 1 && betRangeEnd === 3;
+                              const isTop5Selected = isThisCardSelected && betType === 'range' && betRangeStart === 1 && betRangeEnd === 5;
+                              const isTop11Selected = isThisCardSelected && betType === 'range' && betRangeStart === 1 && betRangeEnd === 11;
+                              const isCustomSelected = isThisCardSelected && !isWinnerSelected && !isTop3Selected && !isTop5Selected && !isTop11Selected;
+
+                              return (
+                                <div 
+                                  key={lp.id} 
+                                  className={`bg-slate-950/60 border rounded-xl p-2.5 transition-all duration-150 ${
+                                    isThisCardSelected 
+                                      ? 'border-amber-400/40 bg-amber-400/[0.01]' 
+                                      : 'border-white/5 hover:border-white/10'
+                                  }`}
+                                >
+                                  {/* Player Mini Header */}
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-sm leading-none">{p.nation === 'Spain' ? '🇪🇸' : '🇦🇷'}</span>
+                                      <div>
+                                        <div className="text-[10px] font-black font-display text-slate-100 flex items-center space-x-1.5">
+                                          <span>{p.name}</span>
+                                          <span className="text-[7px] font-mono text-slate-500 font-normal">OVR {lp.rating}</span>
+                                          {ownedCard ? (
+                                            <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 text-[6px] font-mono uppercase tracking-wider px-1 rounded-sm font-bold">Owned</span>
+                                          ) : (
+                                            <span className="bg-slate-800 text-slate-400 border border-white/5 text-[6px] font-mono uppercase tracking-wider px-1 rounded-sm">Match</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <span className="text-[8px] font-mono text-slate-500 uppercase block leading-none">Live Rank</span>
+                                      <span className="text-[11px] font-black font-mono text-amber-400">#{currentRank}</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Odds Grid buttons */}
+                                  <div className="grid grid-cols-5 gap-1.5">
+                                    {/* Winner #1 button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBetSelectedCardId(targetCardId);
+                                        setBetType('exact');
+                                        setBetTargetRank(1);
+                                        setBetError('');
+                                      }}
+                                      className={`p-1 rounded flex flex-col items-center justify-center border text-center transition-all cursor-pointer ${
+                                        isWinnerSelected 
+                                          ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold' 
+                                          : 'bg-slate-950 border-white/5 hover:border-slate-800 hover:bg-slate-900/50'
+                                      }`}
+                                    >
+                                      <span className="text-[6.5px] uppercase tracking-tight opacity-75 font-mono">Winner</span>
+                                      <span className="text-[9px] font-mono font-black mt-0.5">
+                                        {formatOdds(15.00, oddsFormat)}
+                                      </span>
+                                    </button>
+
+                                    {/* Top 3 button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBetSelectedCardId(targetCardId);
+                                        setBetType('range');
+                                        setBetRangeStart(1);
+                                        setBetRangeEnd(3);
+                                        setBetError('');
+                                      }}
+                                      className={`p-1 rounded flex flex-col items-center justify-center border text-center transition-all cursor-pointer ${
+                                        isTop3Selected 
+                                          ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold' 
+                                          : 'bg-slate-950 border-white/5 hover:border-slate-800 hover:bg-slate-900/50'
+                                      }`}
+                                    >
+                                      <span className="text-[6.5px] uppercase tracking-tight opacity-75 font-mono">Top 3</span>
+                                      <span className="text-[9px] font-mono font-black mt-0.5">
+                                        {formatOdds(7.33, oddsFormat)}
+                                      </span>
+                                    </button>
+
+                                    {/* Top 5 button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBetSelectedCardId(targetCardId);
+                                        setBetType('range');
+                                        setBetRangeStart(1);
+                                        setBetRangeEnd(5);
+                                        setBetError('');
+                                      }}
+                                      className={`p-1 rounded flex flex-col items-center justify-center border text-center transition-all cursor-pointer ${
+                                        isTop5Selected 
+                                          ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold' 
+                                          : 'bg-slate-950 border-white/5 hover:border-slate-800 hover:bg-slate-900/50'
+                                      }`}
+                                    >
+                                      <span className="text-[6.5px] uppercase tracking-tight opacity-75 font-mono">Top 5</span>
+                                      <span className="text-[9px] font-mono font-black mt-0.5">
+                                        {formatOdds(4.40, oddsFormat)}
+                                      </span>
+                                    </button>
+
+                                    {/* Top 11 button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBetSelectedCardId(targetCardId);
+                                        setBetType('range');
+                                        setBetRangeStart(1);
+                                        setBetRangeEnd(11);
+                                        setBetError('');
+                                      }}
+                                      className={`p-1 rounded flex flex-col items-center justify-center border text-center transition-all cursor-pointer ${
+                                        isTop11Selected 
+                                          ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold' 
+                                          : 'bg-slate-950 border-white/5 hover:border-slate-800 hover:bg-slate-900/50'
+                                      }`}
+                                    >
+                                      <span className="text-[6.5px] uppercase tracking-tight opacity-75 font-mono">Top 11</span>
+                                      <span className="text-[9px] font-mono font-black mt-0.5">
+                                        {formatOdds(2.00, oddsFormat)}
+                                      </span>
+                                    </button>
+
+                                    {/* Custom button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBetSelectedCardId(targetCardId);
+                                        setBetError('');
+                                      }}
+                                      className={`p-1 rounded flex flex-col items-center justify-center border text-center transition-all cursor-pointer ${
+                                        isCustomSelected 
+                                          ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold shadow-[0_0_8px_rgba(245,158,11,0.2)]' 
+                                          : 'bg-slate-950 border-white/5 hover:border-slate-800 hover:bg-slate-900/50'
+                                      }`}
+                                    >
+                                      <span className="text-[6.5px] uppercase tracking-tight opacity-75 font-mono">Custom</span>
+                                      <span className="text-[9px] font-mono mt-0.5 font-bold">bespoke</span>
+                                    </button>
+
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                    {/* SECTION 2: ACTIVE SPORTSBOOK BET SLIP */}
+                    {false && (
+                    <div className="bg-slate-950 border border-white/5 rounded-xl overflow-hidden relative shadow-lg">
+                      <div className="bg-slate-900/60 px-3 py-2 border-b border-white/5 flex items-center justify-between">
+                        <div className="flex items-center space-x-1.5">
+                          <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                          <span className="text-[9px] font-black uppercase tracking-wider font-mono text-slate-200">
+                            Single Bet Slip
+                          </span>
+                        </div>
+                        {betSelectedCardId && (
+                          <button
+                            onClick={() => {
+                              setBetSelectedCardId('');
+                              setBetError('');
+                            }}
+                            className="text-[9px] font-mono text-rose-400 hover:text-rose-300 transition"
+                          >
+                            Clear Slip
+                          </button>
+                        )}
+                      </div>
+
+                      {!betSelectedCardId ? (
+                        <div className="p-6 text-center text-[10px] text-slate-500 flex flex-col items-center justify-center space-y-1.5 min-h-[140px]">
+                          <Coins className="w-5 h-5 text-slate-700 animate-pulse" />
+                          <span>Bet Slip Empty</span>
+                          <p className="text-[8px] text-slate-600 max-w-xs mx-auto">
+                            Click any odds cell on the Squad Board above to instantly build your speculation slip.
+                          </p>
+                        </div>
+                      ) : (() => {
+                        const card = collection.find(c => c.id === betSelectedCardId);
+                        const player = card ? PLAYER_MAP[card.playerId] : null;
+                        const liveP = card ? livePlayers.find(lp => lp.id === card.playerId) : null;
+                        const currentRank = liveP 
+                          ? [...livePlayers].sort((a,b)=>b.rating-a.rating).findIndex(x => x.id === card.playerId) + 1
+                          : null;
+                        
+                        if (!player || !liveP) return null;
+
+                        // Calculate multiplier
+                        let multiplier = 15.00;
+                        if (betType === 'range') {
+                          const size = Math.max(1, betRangeEnd - betRangeStart + 1);
+                          multiplier = parseFloat((22 / size).toFixed(2));
+                          multiplier = Math.max(1.2, Math.min(15, multiplier));
+                        }
+
+                        // Determine if they are viewing a predefined quick market
+                        const isWinner = betType === 'exact' && betTargetRank === 1;
+                        const isTop3 = betType === 'range' && betRangeStart === 1 && betRangeEnd === 3;
+                        const isTop5 = betType === 'range' && betRangeStart === 1 && betRangeEnd === 5;
+                        const isTop11 = betType === 'range' && betRangeStart === 1 && betRangeEnd === 11;
+                        const isCustom = !isWinner && !isTop3 && !isTop5 && !isTop11;
+
+                        const stake = parseFloat(betAmount) || 0;
+                        const estReturn = stake * multiplier;
+                        const estProfit = Math.max(0, estReturn - stake);
+
+                        return (
+                          <div className="p-3.5 space-y-3.5">
+                            {/* Selected Card summary */}
+                            <div className="bg-slate-900/40 p-2 rounded-lg border border-white/5 flex items-center justify-between">
+                              <div className="flex items-center space-x-2">
+                                <span className="text-lg leading-none">{player.nation === 'Spain' ? '🇪🇸' : '🇦🇷'}</span>
+                                <div>
+                                  <span className="text-[10.5px] font-black font-display text-slate-100 block">
+                                    {player.name}
+                                  </span>
+                                  <span className="text-[8px] font-mono text-slate-450 uppercase block">
+                                    {player.position} • Current live Rank #{currentRank} (OVR {liveP.rating})
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Active Market Selection Badge */}
+                            <div className="bg-slate-900/50 p-2.5 rounded-lg border border-white/5 flex items-center justify-between">
+                              <div className="space-y-0.5">
+                                <span className="text-[8px] font-mono text-slate-500 uppercase block font-bold">Active Speculation Market</span>
+                                <span className="text-[10px] font-black font-display text-amber-400">
+                                  {getBetMarketLabel({ type: betType, targetRank: betTargetRank, rangeStart: betRangeStart, rangeEnd: betRangeEnd })}
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-[8px] font-mono text-slate-500 uppercase block font-bold">Odds Value</span>
+                                <span className="text-xs font-black font-mono text-amber-400 tracking-wider">
+                                  {formatOdds(multiplier, oddsFormat)}
+                                  <span className="text-[8.5px] text-slate-500 font-normal ml-1 font-mono">
+                                    ({oddsFormat === 'decimal' ? getAmericanOdds(multiplier) : `${multiplier.toFixed(2)}x`})
+                                  </span>
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Standard Selector Toggles to customize bespoke targets if selected */}
+                            <div className="bg-slate-900/20 p-2.5 rounded-lg border border-white/[0.03] space-y-2">
+                              <div className="flex items-center justify-between text-[8px] font-mono uppercase tracking-wider text-slate-400 font-black">
+                                <span>Modify Selection Mode</span>
+                                <span className="text-amber-400">{isCustom ? 'Bespoke Custom' : 'Predefined Market'}</span>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setBetType('exact');
+                                    setBetError('');
+                                  }}
+                                  className={`py-1 rounded text-[8.5px] font-bold tracking-wider uppercase border transition ${
+                                    betType === 'exact' 
+                                      ? 'bg-amber-400/10 border-amber-400/30 text-amber-400 font-bold' 
+                                      : 'bg-transparent border-white/5 text-slate-500 hover:text-slate-350'
+                                  }`}
+                                >
+                                  🎯 Exact Rank
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setBetType('range');
+                                    setBetError('');
+                                  }}
+                                  className={`py-1 rounded text-[8.5px] font-bold tracking-wider uppercase border transition ${
+                                    betType === 'range' 
+                                      ? 'bg-amber-400/10 border-amber-400/30 text-amber-400 font-bold' 
+                                      : 'bg-transparent border-white/5 text-slate-500 hover:text-slate-350'
+                                  }`}
+                                >
+                                  ↔️ Rank Range
+                                </button>
+                              </div>
+
+                              {/* Manual Sliders Customization */}
+                              {betType === 'exact' ? (
+                                <div className="pt-1.5">
+                                  <div className="flex justify-between text-[8px] font-mono text-slate-400 mb-1">
+                                    <span>Target Rank Prediction:</span>
+                                    <span className="font-bold text-amber-400 text-[10px]">Rank #{betTargetRank}</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min="1"
+                                    max="22"
+                                    value={betTargetRank}
+                                    onChange={(e) => {
+                                      setBetTargetRank(parseInt(e.target.value));
+                                      setBetError('');
+                                    }}
+                                    className="w-full accent-amber-400 h-1 rounded bg-slate-950 cursor-pointer"
+                                  />
+                                  <div className="flex justify-between text-[6px] font-mono text-slate-550 select-none">
+                                    <span>#1 Gold Winner</span>
+                                    <span>#22 Low Performance</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-2 gap-2 pt-1.5">
+                                  <div>
+                                    <label className="block text-[6.5px] font-mono text-slate-500 uppercase mb-0.5">Min Rank (Best)</label>
+                                    <select
+                                      value={betRangeStart}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value);
+                                        setBetRangeStart(val);
+                                        if (val > betRangeEnd) setBetRangeEnd(val);
+                                        setBetError('');
+                                      }}
+                                      className="w-full bg-slate-950 border border-white/10 rounded px-1.5 py-1 text-[9px] text-slate-200 focus:outline-none cursor-pointer"
+                                    >
+                                      {Array.from({ length: 22 }, (_, i) => i + 1).map(v => (
+                                        <option key={v} value={v}>#{v}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block text-[6.5px] font-mono text-slate-500 uppercase mb-0.5">Max Rank (Worst)</label>
+                                    <select
+                                      value={betRangeEnd}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value);
+                                        setBetRangeEnd(val);
+                                        setBetError('');
+                                      }}
+                                      className="w-full bg-slate-950 border border-white/10 rounded px-1.5 py-1 text-[9px] text-slate-200 focus:outline-none cursor-pointer"
+                                    >
+                                      {Array.from({ length: 22 }, (_, i) => i + 1)
+                                        .filter(v => v >= betRangeStart)
+                                        .map(v => (
+                                          <option key={v} value={v}>#{v}</option>
+                                        ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Stake Configuration */}
+                            <div className="space-y-1.5">
+                              <label className="block text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                                Risk Amount (Stake $)
+                              </label>
+                              <div className="flex items-center space-x-1.5">
+                                <div className="relative flex-1">
+                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 font-mono text-[9px]">$</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="any"
+                                    value={betAmount}
+                                    onChange={(e) => {
+                                      setBetAmount(e.target.value);
+                                      setBetError('');
+                                    }}
+                                    placeholder="Wager"
+                                    className="w-full bg-slate-900 border border-white/10 rounded-lg pl-5 pr-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-amber-400/50 font-mono"
+                                  />
+                                </div>
+                                <div className="flex space-x-1 shrink-0">
+                                  {['5', '10', '25', '50'].map(val => (
+                                    <button
+                                      key={val}
+                                      type="button"
+                                      onClick={() => {
+                                        setBetAmount(val);
+                                        setBetError('');
+                                      }}
+                                      className={`px-1.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border text-[8.5px] font-mono text-slate-400 ${betAmount === val ? 'border-amber-400/40 text-amber-400 bg-amber-400/5' : 'border-white/5'}`}
+                                    >
+                                      +${val}
+                                    </button>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setBetAmount(Math.floor(balance).toString());
+                                      setBetError('');
+                                    }}
+                                    className="px-1.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-white/5 text-[8px] font-mono text-amber-400 font-black uppercase"
+                                  >
+                                    MAX
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Slip Return Ledger Calculations */}
+                            {stake > 0 && (
+                              <div className="p-2.5 bg-slate-900/60 rounded-lg border border-white/5 text-[9px] font-mono space-y-1">
+                                <div className="flex justify-between items-center text-slate-400">
+                                  <span>Total Stake:</span>
+                                  <span className="text-slate-100 font-bold">${stake.toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between items-center text-slate-400">
+                                  <span>Potential Profit:</span>
+                                  <span className="text-emerald-400 font-bold">
+                                    +${estProfit.toFixed(2)}
+                                  </span>
+                                </div>
+                                <div className="border-t border-white/5 my-1 pt-1 flex justify-between items-center text-slate-200">
+                                  <span className="font-bold">Estimated Payout:</span>
+                                  <span className="text-amber-400 text-xs font-black animate-pulse filter drop-shadow-[0_0_8px_rgba(245,158,11,0.2)]">
+                                    ${estReturn.toFixed(2)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Submit Button */}
+                            {liveMatchTime >= 75 ? (
+                              <div className="text-center py-2 bg-slate-900/80 border border-white/5 rounded-lg text-[8.5px] text-slate-500 font-mono font-bold flex flex-col items-center justify-center space-y-0.5">
+                                <span className="text-amber-500 font-bold uppercase tracking-wider text-[9px]">🕒 Betting Closed</span>
+                                <span>Speculations are locked after the 75th minute!</span>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={handlePlaceBet}
+                                className="w-full py-2 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-slate-950 font-black font-display tracking-wider text-xs uppercase rounded-xl shadow-lg hover:shadow-amber-400/10 active:scale-[0.98] transition cursor-pointer"
+                              >
+                                Place Speculation Slip
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    )}
+
+                    {/* SECTION 3: ACTIVE MATCH BETS */}
+                    {betDeskTab === 'active' && (
+                      <div className="space-y-2 flex-1 flex flex-col min-h-0 overflow-hidden">
+                      <div className="flex items-center justify-between text-[9px] font-mono font-bold text-slate-400 border-b border-white/5 pb-1">
+                        <span>Active Betting Slips ({activeBets.length})</span>
+                        {liveMatchTime < 90 && <span className="text-slate-500 text-[8px]">Pays at Full Time (90')</span>}
+                      </div>
+
+                      {activeBets.length === 0 ? (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center p-4 border border-dashed border-white/5 rounded-xl bg-slate-950/20 text-[10px] text-slate-500">
+                          <Sliders className="w-4 h-4 text-slate-650 mb-1" />
+                          No active predictions for this match.
+                        </div>
+                      ) : (
+                        <div className="flex-1 overflow-y-auto space-y-1.5 max-h-[160px] custom-scrollbar pr-0.5">
+                          {activeBets.map(bet => {
+                            const player = PLAYER_MAP[bet.playerId];
+                            const liveP = livePlayers.find(lp => lp.id === bet.playerId);
+                            const currentRank = liveP 
+                              ? [...livePlayers].sort((a,b)=>b.rating-a.rating).findIndex(x => x.id === bet.playerId) + 1
+                              : null;
+                            
+                            // Check if currently winning
+                            let isCurrentlyWinning = false;
+                            if (currentRank !== null) {
+                              if (bet.type === 'exact') {
+                                isCurrentlyWinning = currentRank === bet.targetRank;
+                              } else {
+                                isCurrentlyWinning = currentRank >= bet.rangeStart! && currentRank <= bet.rangeEnd!;
+                              }
+                            }
+
+                            return (
+                              <div key={bet.id} className="bg-slate-950/80 border border-white/5 rounded-xl p-2.5 flex items-center justify-between hover:bg-slate-900/40 transition">
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center space-x-1.5">
+                                    <span className="text-[10.5px] font-black font-display text-slate-200">{player?.name}</span>
+                                    <span className="text-xs leading-none">{player?.nation === 'Spain' ? '🇪🇸' : '🇦🇷'}</span>
+                                  </div>
+                                  <div className="text-[8.5px] font-mono text-slate-400 flex flex-wrap gap-x-2 gap-y-0.5 items-center">
+                                    <span>Stake: <strong className="text-slate-200">${bet.betAmount.toFixed(2)}</strong></span>
+                                    <span>•</span>
+                                    <span>Payout: <strong className="text-amber-400">${(bet.betAmount * bet.multiplier).toFixed(2)}</strong></span>
+                                    <span>•</span>
+                                    <span>Odds: <strong className="text-slate-300">{formatOdds(bet.multiplier, oddsFormat)}</strong></span>
+                                  </div>
+                                </div>
+
+                                <div className="text-right flex flex-col items-end space-y-1 shrink-0">
+                                  <div className="text-[8.5px] font-mono text-slate-450 leading-none">
+                                    Market: <strong className="text-slate-200 block text-[9.5px] font-display mt-0.5">{getBetMarketLabel(bet)}</strong>
+                                  </div>
+                                  
+                                  {currentRank !== null ? (
+                                    <div className="flex items-center space-x-1 mt-0.5">
+                                      <span className="text-[8px] font-mono text-slate-500">Live: <strong>#{currentRank}</strong></span>
+                                      <span className={`text-[7px] font-black uppercase tracking-wider font-mono px-1 py-0.2 rounded border shadow animate-pulse ${
+                                        isCurrentlyWinning 
+                                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
+                                          : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                                      }`}>
+                                        {isCurrentlyWinning ? 'Winning' : 'Losing'}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[8px] text-slate-500 font-mono">Loading rank...</span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                    {/* Core Error Dialog inline inside prediction desk */}
+                    {betError && (
+                      <div className="text-[9.5px] text-rose-400 font-mono bg-rose-950/20 border border-rose-500/10 p-2.5 rounded-lg flex items-center space-x-1.5 shrink-0 animate-pulse">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                        <span>{betError}</span>
+                      </div>
+                    )}
+
+                    {/* BOTTOM BET SLIP DRAWER */}
+                    <AnimatePresence>
+                      {betSelectedCardId && (() => {
+                        let card = collection.find(c => c.id === betSelectedCardId);
+                        if (!card) {
+                          const liveP = livePlayers.find(lp => lp.id === betSelectedCardId);
+                          if (liveP) {
+                            card = {
+                              id: liveP.id,
+                              playerId: liveP.id,
+                              rating: liveP.rating,
+                              recentEvents: [],
+                              obtainedAt: ''
+                            };
+                          }
+                        }
+                        const player = card ? PLAYER_MAP[card.playerId] : null;
+                        const liveP = card ? livePlayers.find(lp => lp.id === card.playerId) : null;
+                        const currentRank = liveP 
+                          ? [...livePlayers].sort((a,b)=>b.rating-a.rating).findIndex(x => x.id === card.playerId) + 1
+                          : null;
+                        
+                        if (!player || !liveP) return null;
+
+                        // Calculate multiplier
+                        let multiplier = 15.00;
+                        if (betType === 'range') {
+                          const size = Math.max(1, betRangeEnd - betRangeStart + 1);
+                          multiplier = parseFloat((22 / size).toFixed(2));
+                          multiplier = Math.max(1.2, Math.min(15, multiplier));
+                        }
+
+                        // Determine if they are viewing a predefined quick market
+                        const isWinner = betType === 'exact' && betTargetRank === 1;
+                        const isTop3 = betType === 'range' && betRangeStart === 1 && betRangeEnd === 3;
+                        const isTop5 = betType === 'range' && betRangeStart === 1 && betRangeEnd === 5;
+                        const isTop11 = betType === 'range' && betRangeStart === 1 && betRangeEnd === 11;
+                        const isCustom = !isWinner && !isTop3 && !isTop5 && !isTop11;
+
+                        const stake = parseFloat(betAmount) || 0;
+                        const estReturn = stake * multiplier;
+                        const estProfit = Math.max(0, estReturn - stake);
+
+                        const handlePlaceAndClose = () => {
+                          handlePlaceBet();
+                          // Close drawer and navigate to Active bets if successful
+                          setTimeout(() => {
+                            if (!betError) {
+                              setBetSelectedCardId('');
+                              setBetDeskTab('active');
+                            }
+                          }, 50);
+                        };
+
+                        return (
+                          <motion.div
+                            initial={{ y: '100%' }}
+                            animate={{ y: 0 }}
+                            exit={{ y: '100%' }}
+                            transition={{ type: 'spring', damping: 24, stiffness: 220 }}
+                            className="absolute inset-x-0 bottom-0 bg-slate-950 border-t-2 border-amber-400/40 shadow-[0_-8px_32px_rgba(0,0,0,0.95)] rounded-t-2xl z-20 flex flex-col max-h-[96%] overflow-hidden text-[10px]"
+                          >
+                            {/* Drawer Header */}
+                            <div className="bg-slate-900 border-b border-white/5 px-3.5 py-2.5 flex items-center justify-between shrink-0">
+                              <div className="flex items-center space-x-2">
+                                <div className="bg-amber-400/10 p-1 rounded">
+                                  <Coins className="w-3.5 h-3.5 text-amber-400" />
+                                </div>
+                                <span className="text-[10px] font-black uppercase tracking-wider font-mono text-amber-400">
+                                  Bet Slip Ticket
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setBetSelectedCardId('');
+                                  setBetError('');
+                                }}
+                                className="text-slate-400 hover:text-slate-100 p-1 rounded-full hover:bg-white/5 transition animate-none cursor-pointer"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+
+                            {/* Drawer Content */}
+                            <div className="flex-1 overflow-y-auto p-4 space-y-3.5 custom-scrollbar min-h-0">
+                              
+                              {/* Selected Player Card Info */}
+                              <div className="bg-slate-900/60 p-2.5 rounded-xl border border-white/5 flex items-center justify-between">
+                                <div className="flex items-center space-x-2.5 min-w-0">
+                                  <span className="text-xl leading-none flex-none">{player.nation === 'Spain' ? '🇪🇸' : '🇦🇷'}</span>
+                                  <div className="truncate">
+                                    <span className="font-black font-display text-slate-100 block truncate text-[11px] leading-tight">
+                                      {player.name}
+                                    </span>
+                                    <span className="text-[8.5px] font-mono text-slate-500 uppercase leading-none block mt-0.5">
+                                      {player.position} • Current Live Rank <strong className="text-amber-400 font-black">#{currentRank}</strong> (OVR {liveP.rating})
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Active Market and Multiplier */}
+                              <div className="bg-slate-900/40 p-2.5 rounded-xl border border-white/[0.03] flex items-center justify-between gap-2 font-sans">
+                                <div className="space-y-0.5">
+                                  <span className="text-[7.5px] font-mono text-slate-500 uppercase block font-bold leading-none">Active Market Prediction</span>
+                                  <span className="text-[10px] font-black font-display text-amber-400 block leading-tight">
+                                    {getBetMarketLabel({ type: betType, targetRank: betTargetRank, rangeStart: betRangeStart, rangeEnd: betRangeEnd })}
+                                  </span>
+                                </div>
+                                <div className="text-right flex-none">
+                                  <span className="text-[7.5px] font-mono text-slate-500 uppercase block font-bold leading-none">Odds Value</span>
+                                  <span className="text-xs font-black font-mono text-amber-400 block mt-0.5">
+                                    {formatOdds(multiplier, oddsFormat)}
+                                    <span className="text-[8px] text-slate-500 font-normal ml-1 font-mono uppercase">
+                                      ({oddsFormat === 'decimal' ? getAmericanOdds(multiplier) : `${multiplier.toFixed(2)}x`})
+                                    </span>
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Selection Customizer (collapsible or interactive) */}
+                              <div className="bg-slate-900/20 p-2.5 rounded-xl border border-white/[0.02] space-y-2.5">
+                                <div className="flex items-center justify-between text-[7.5px] font-mono uppercase tracking-wider text-slate-500 font-bold">
+                                  <span>Modify Selection Mode</span>
+                                  <span className="text-amber-400 font-black">{isCustom ? 'Bespoke Custom' : 'Standard Option'}</span>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setBetType('exact');
+                                      setBetError('');
+                                    }}
+                                    className={`py-1 rounded text-[8px] font-bold tracking-wider uppercase border transition cursor-pointer ${
+                                      betType === 'exact' 
+                                        ? 'bg-amber-400/15 border-amber-400/30 text-amber-400 font-bold shadow-[0_0_8px_rgba(245,158,11,0.05)]' 
+                                        : 'bg-transparent border-white/5 text-slate-500 hover:text-slate-350'
+                                    }`}
+                                  >
+                                    🎯 Exact Rank
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setBetType('range');
+                                      setBetError('');
+                                    }}
+                                    className={`py-1 rounded text-[8px] font-bold tracking-wider uppercase border transition cursor-pointer ${
+                                      betType === 'range' 
+                                        ? 'bg-amber-400/15 border-amber-400/30 text-amber-400 font-bold shadow-[0_0_8px_rgba(245,158,11,0.05)]' 
+                                        : 'bg-transparent border-white/5 text-slate-500 hover:text-slate-350'
+                                    }`}
+                                  >
+                                    ↔️ Rank Range
+                                  </button>
+                                </div>
+
+                                {/* Target Inputs based on Exact vs Range */}
+                                {betType === 'exact' ? (
+                                  <div className="pt-1 select-none">
+                                    <div className="flex justify-between text-[8px] font-mono text-slate-400 mb-1">
+                                      <span>Target Rank Prediction:</span>
+                                      <span className="font-black text-amber-400 text-[10px]">Rank #{betTargetRank}</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min="1"
+                                      max="22"
+                                      value={betTargetRank}
+                                      onChange={(e) => {
+                                        setBetTargetRank(parseInt(e.target.value));
+                                        setBetError('');
+                                      }}
+                                      className="w-full accent-amber-400 h-1 rounded bg-slate-950 cursor-pointer"
+                                    />
+                                    <div className="flex justify-between text-[6px] font-mono text-slate-600 mt-1 uppercase">
+                                      <span>#1 Winner</span>
+                                      <span>#22 Worst Form</span>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="grid grid-cols-2 gap-2 pt-1">
+                                    <div>
+                                      <label className="block text-[6.5px] font-mono text-slate-500 uppercase mb-0.5 font-bold">Min Rank (Best)</label>
+                                      <select
+                                        value={betRangeStart}
+                                        onChange={(e) => {
+                                          const val = parseInt(e.target.value);
+                                          setBetRangeStart(val);
+                                          if (val > betRangeEnd) setBetRangeEnd(val);
+                                          setBetError('');
+                                        }}
+                                        className="w-full bg-slate-950 border border-white/10 rounded px-2 py-1 text-[9px] text-slate-200 focus:outline-none focus:border-amber-400/35 cursor-pointer font-mono"
+                                      >
+                                        {Array.from({ length: 22 }, (_, i) => i + 1).map(v => (
+                                          <option key={v} value={v}>#{v}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label className="block text-[6.5px] font-mono text-slate-500 uppercase mb-0.5 font-bold">Max Rank (Worst)</label>
+                                      <select
+                                        value={betRangeEnd}
+                                        onChange={(e) => {
+                                          const val = parseInt(e.target.value);
+                                          setBetRangeEnd(val);
+                                          setBetError('');
+                                        }}
+                                        className="w-full bg-slate-950 border border-white/10 rounded px-2 py-1 text-[9px] text-slate-200 focus:outline-none focus:border-amber-400/35 cursor-pointer font-mono"
+                                      >
+                                        {Array.from({ length: 22 }, (_, i) => i + 1)
+                                          .filter(v => v >= betRangeStart)
+                                          .map(v => (
+                                            <option key={v} value={v}>#{v}</option>
+                                          ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Wager Input (Stake) */}
+                              <div className="space-y-1.5 font-mono">
+                                <label className="block text-[8px] font-sans uppercase tracking-wider text-slate-400 font-bold">
+                                  Risk Amount (Stake $)
+                                </label>
+                                <div className="flex items-center space-x-1.5">
+                                  <div className="relative flex-1">
+                                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 font-mono text-[10px]">$</span>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      step="any"
+                                      value={betAmount}
+                                      onChange={(e) => {
+                                        setBetAmount(e.target.value);
+                                        setBetError('');
+                                      }}
+                                      placeholder="Wager"
+                                      className="w-full bg-slate-900 border border-white/10 rounded-lg pl-6 pr-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-amber-400/50 font-mono"
+                                    />
+                                  </div>
+                                  <div className="flex space-x-1 shrink-0">
+                                    {['5', '10', '25', '50'].map(val => (
+                                      <button
+                                        key={val}
+                                        type="button"
+                                        onClick={() => {
+                                          setBetAmount(val);
+                                          setBetError('');
+                                        }}
+                                        className={`px-2 py-1 rounded bg-slate-900 hover:bg-slate-850 border text-[8.5px] font-mono text-slate-400 transition cursor-pointer ${betAmount === val ? 'border-amber-400/40 text-amber-400 bg-amber-400/5' : 'border-white/5'}`}
+                                      >
+                                        +${val}
+                                      </button>
+                                    ))}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBetAmount(Math.floor(balance).toString());
+                                        setBetError('');
+                                      }}
+                                      className="px-2 py-1 rounded bg-slate-900 hover:bg-slate-850 border border-white/5 text-[8px] font-mono text-amber-400 font-black uppercase transition cursor-pointer"
+                                    >
+                                      MAX
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Est Return calculations */}
+                              {stake > 0 && (
+                                <div className="p-2.5 bg-slate-900/60 rounded-xl border border-white/5 text-[9px] font-mono space-y-1.5 animate-fade-in">
+                                  <div className="flex justify-between items-center text-slate-400">
+                                    <span>Total Stake:</span>
+                                    <span className="text-slate-100 font-bold">${stake.toFixed(2)}</span>
+                                  </div>
+                                  <div className="flex justify-between items-center text-slate-400">
+                                    <span>Potential Profit:</span>
+                                    <span className="text-emerald-400 font-bold">
+                                      +${estProfit.toFixed(2)}
+                                    </span>
+                                  </div>
+                                  <div className="border-t border-white/5 my-1.5 pt-1.5 flex justify-between items-center text-slate-200">
+                                    <span className="font-bold font-sans">Estimated Payout:</span>
+                                    <span className="text-amber-400 text-xs font-black filter drop-shadow-[0_0_8px_rgba(245,158,11,0.2)]">
+                                      ${estReturn.toFixed(2)}
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Error Dialog inside slip drawer */}
+                              {betError && (
+                                <div id="slip_error_box" className="text-[9px] text-rose-400 font-mono bg-rose-950/20 border border-rose-500/10 p-2.5 rounded-lg flex items-center space-x-1.5 shrink-0 animate-pulse">
+                                  <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                                  <span>{betError}</span>
+                                </div>
+                              )}
+
+                            </div>
+
+                            {/* Submit Section inside slip drawer */}
+                            <div className="bg-slate-900 border-t border-white/5 p-3 shrink-0">
+                              {liveMatchTime >= 75 ? (
+                                <div className="text-center py-2 text-[8.5px] text-slate-500 font-mono font-bold flex flex-col items-center justify-center space-y-0.5">
+                                  <span className="text-amber-500 font-bold uppercase tracking-wider text-[9px]">🕒 Speculations Locked</span>
+                                  <span>Bets are locked after the 75th minute!</span>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={handlePlaceAndClose}
+                                  className="w-full py-2 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-slate-950 font-black font-display tracking-wider text-xs uppercase rounded-xl shadow-lg hover:shadow-amber-400/20 active:scale-[0.98] transition cursor-pointer"
+                                >
+                                  Place Speculation Slip
+                                </button>
+                              )}
+                            </div>
+
+                          </motion.div>
+                        );
+                      })()}
+                    </AnimatePresence>
+
+                  </div>
+                ) : (
+                  /* Resolved Bets History */
+                  <div className="flex-1 flex flex-col overflow-hidden space-y-2">
+                    <div className="text-[9px] font-mono font-bold text-slate-400 border-b border-white/5 pb-1 flex justify-between">
+                      <span>Past Settlements Ledger</span>
+                      <span className="text-slate-500">Last 50 bets</span>
+                    </div>
+
+                    {resolvedBets.length === 0 ? (
+                      <div className="flex-1 flex flex-col items-center justify-center text-center p-4 border border-dashed border-white/5 rounded-xl bg-slate-950/20 text-[10px] text-slate-500">
+                        <History className="w-4 h-4 text-slate-650 mb-1" />
+                        No past betting records found.
+                        <p className="text-[8px] text-slate-600 mt-1">Settle match outcomes by completing a 90' simulation!</p>
+                      </div>
+                    ) : (
+                      <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar pr-0.5">
+                        {resolvedBets.map(bet => {
+                          const player = PLAYER_MAP[bet.playerId];
+                          return (
+                            <div key={bet.id} className="bg-slate-950 border border-white/5 rounded-xl p-2.5 flex items-center justify-between hover:bg-slate-900/40 transition">
+                              <div>
+                                <div className="flex items-center space-x-1.5">
+                                  <span className="text-[10.5px] font-bold font-display text-slate-200">{player?.name || 'Unknown'}</span>
+                                  <span className="text-xs leading-none">{player?.nation === 'Spain' ? '🇪🇸' : '🇦🇷'}</span>
+                                </div>
+                                <div className="text-[8.5px] font-mono text-slate-500 mt-1 flex flex-col gap-0.5">
+                                  <div className="flex items-center space-x-2">
+                                    <span>Stake: <strong>${bet.betAmount.toFixed(2)}</strong></span>
+                                    <span>•</span>
+                                    <span>Minute: {bet.placedAtMinute}'</span>
+                                    <span>•</span>
+                                    <span>Odds: <strong>{formatOdds(bet.multiplier, oddsFormat)}</strong></span>
+                                  </div>
+                                  <div>
+                                    Target: <strong className="text-slate-300">{getBetMarketLabel(bet)}</strong>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="text-right flex flex-col items-end space-y-1 shrink-0">
+                                <span className="text-[8px] font-mono text-slate-500 uppercase font-bold leading-none">Final Rank: #{bet.actualFinalRank}</span>
+                                {bet.status === 'won' ? (
+                                  <span className="text-[10.5px] font-black font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded shadow leading-none">
+                                    +${bet.payoutAmount?.toFixed(2)}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10.5px] font-bold font-mono text-slate-500 bg-white/5 border border-white/5 px-1.5 py-0.5 rounded shadow leading-none">
+                                    -${bet.betAmount.toFixed(2)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
             </div>
+
+          </div>
+
+          {/* ROW 2: PLAYER PERFORMANCE LEADERBOARD & COMMENTARY STREAM */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-stretch mt-8">
             
-            {/* RIGHT COLUMN: SIM FEED */}
-            <div className="lg:col-span-1 bento-cell p-4 flex flex-col h-[740px] lg:h-full shadow-2xl">
-              <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5">
+            {/* LEFT/CENTER 2 COLS: LIVE PLAYER LEADERBOARD */}
+            <div className="lg:col-span-2 flex flex-col h-auto lg:h-[350px] bento-cell p-4 shadow-2xl overflow-hidden relative">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-2xl pointer-events-none" />
+              
+              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-white/5 shrink-0">
+                <div className="flex items-center space-x-2">
+                  <Trophy className="w-4 h-4 text-amber-400" />
+                  <div>
+                    <h3 className="text-xs font-bold font-display text-slate-100">Live Player Rankings</h3>
+                    <p className="text-[8px] font-mono text-slate-400 uppercase tracking-wider">Sorted by Live Form Rating</p>
+                  </div>
+                </div>
+                <span className="text-[8px] font-mono text-slate-500 bg-slate-950 px-2 py-0.5 rounded border border-white/5">
+                  {livePlayers.length} Players Active
+                </span>
+              </div>
+
+              {/* Performance Rankings Table */}
+              <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5">
+                <table className="w-full text-left border-collapse text-[10px]">
+                  <thead>
+                    <tr className="border-b border-white/5 text-[7.5px] font-mono text-slate-500 uppercase tracking-wider sticky top-0 bg-slate-950 z-10">
+                      <th className="py-1.5 pl-1 w-[45px]">Rank</th>
+                      <th className="py-1.5">Player</th>
+                      <th className="py-1.5 text-center w-[40px]">Goals</th>
+                      <th className="py-1.5 text-center w-[40px]">Ast</th>
+                      <th className="py-1.5 text-center w-[45px]">Cards</th>
+                      <th className="py-1.5 text-right pr-2 w-[70px]">Live Form</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.02]">
+                    {[...livePlayers]
+                      .sort((a, b) => b.rating - a.rating)
+                      .map((liveP, idx) => {
+                        const p = PLAYER_MAP[liveP.id];
+                        if (!p) return null;
+                        const prevRankIdx = prevSortedIdsRef.current.indexOf(liveP.id);
+                        const rankDiff = prevRankIdx === -1 ? 0 : prevRankIdx - idx;
+                        
+                        // Cards count
+                        const yellowCount = liveP.recentEvents.filter(e => e.type === 'Yellow Card').length;
+                        const redCount = liveP.recentEvents.filter(e => e.type === 'Red Card').length;
+
+                        return (
+                          <tr key={liveP.id} className="hover:bg-white/[0.02] transition-colors">
+                            <td className="py-1.5 pl-1 font-mono font-bold">
+                              <div className="flex items-center space-x-1">
+                                <span className={`w-4 text-center ${idx < 3 ? 'text-amber-400 font-black' : 'text-slate-500'}`}>
+                                  #{idx + 1}
+                                </span>
+                                {rankDiff > 0 ? (
+                                  <span className="text-[7.5px] text-emerald-400 font-bold flex items-center">▲{rankDiff}</span>
+                                ) : rankDiff < 0 ? (
+                                  <span className="text-[7.5px] text-rose-400 font-bold flex items-center">▼{Math.abs(rankDiff)}</span>
+                                ) : (
+                                  <span className="text-[7.5px] text-slate-655 font-black">—</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-1.5">
+                              <div className="flex items-center space-x-2">
+                                <span className="text-sm leading-none" title={p.nation}>{p.nation === 'Spain' ? '🇪🇸' : '🇦🇷'}</span>
+                                <div className="truncate">
+                                  <span className="font-bold text-slate-200 block truncate max-w-[100px] sm:max-w-[140px] leading-tight">{p.name}</span>
+                                  <span className="text-[7.5px] font-mono text-slate-500 uppercase leading-none">{p.position} • {p.rarity}</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-1.5 text-center font-mono font-bold text-slate-300">
+                              {liveP.goals > 0 ? (
+                                <span className="text-emerald-400 font-black flex items-center justify-center space-x-0.5">
+                                  <span>⚽</span>
+                                  <span>{liveP.goals}</span>
+                                </span>
+                              ) : '0'}
+                            </td>
+                            <td className="py-1.5 text-center font-mono font-bold text-slate-300">
+                              {liveP.assists > 0 ? (
+                                <span className="text-sky-400 font-black flex items-center justify-center space-x-0.5">
+                                  <span>🎯</span>
+                                  <span>{liveP.assists}</span>
+                                </span>
+                              ) : '0'}
+                            </td>
+                            <td className="py-1.5 text-center font-mono text-slate-350">
+                              <div className="flex items-center justify-center space-x-0.5">
+                                {yellowCount > 0 && (
+                                  <span className="bg-yellow-400/10 border border-yellow-400/20 text-yellow-400 text-[7.5px] px-1 rounded font-bold" title={`${yellowCount} Yellow Card`}>
+                                    🟨
+                                  </span>
+                                )}
+                                {redCount > 0 && (
+                                  <span className="bg-red-500/10 border border-red-500/20 text-red-500 text-[7.5px] px-1 rounded font-bold" title="Red Card">
+                                    🟥
+                                  </span>
+                                )}
+                                {yellowCount === 0 && redCount === 0 && <span className="text-slate-655">—</span>}
+                              </div>
+                            </td>
+                            <td className="py-1.5 text-right pr-2 font-mono">
+                              <span className="font-black text-amber-400 text-[10.5px]">{liveP.rating}</span>
+                              <span className="text-[7.5px] text-slate-500 ml-0.5 uppercase">OVR</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* RIGHT COLUMN: LIVE SIM FEED */}
+            <div className="lg:col-span-1 flex flex-col h-auto lg:h-[350px] bento-cell p-4 shadow-2xl overflow-hidden relative">
+              <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5 shrink-0">
                 <div className="flex items-center space-x-2">
                   <History className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-xs font-bold font-display text-slate-100">Live Sim Feed</h3>
+                  <div>
+                    <h3 className="text-xs font-bold font-display text-slate-100">Live Sim Feed</h3>
+                    <p className="text-[8px] font-mono text-slate-400 uppercase tracking-wider">Simulated Ticker Stream</p>
+                  </div>
                 </div>
               </div>
 
               {/* Scrolling output console log */}
-              <div className="flex-1 flex flex-col bg-slate-950/90 border border-emerald-500/20 rounded-xl overflow-hidden shadow-inner">
-                
+              <div className="flex-1 flex flex-col bg-slate-950/90 border border-emerald-500/20 rounded-xl overflow-hidden shadow-inner min-h-0">
                 {/* Column Headers */}
-                <div className="flex items-center px-2 py-1 bg-slate-900 border-b border-white/5 text-[8px] font-mono font-bold tracking-widest text-slate-500 uppercase select-none">
+                <div className="flex items-center px-2 py-1 bg-slate-900 border-b border-white/5 text-[8px] font-mono font-bold tracking-widest text-slate-500 uppercase select-none shrink-0">
                   <div className="w-[35px] flex-none">MIN</div>
                   <div className="flex-1 pl-1">EVENT DESCRIPTION</div>
                   <div className="w-[35px] flex-none text-right">PTS</div>
                 </div>
 
                 {/* Logs Content */}
-                <div className="flex-1 overflow-y-auto p-1.5 space-y-1 scrollbar-thin scrollbar-thumb-slate-800">
+                <div className="flex-1 overflow-y-auto p-1.5 space-y-1 custom-scrollbar">
                   <AnimatePresence initial={false}>
-                    {globalLogs.map((log) => {
-                      return (
-                        <motion.div
-                          initial={{ opacity: 0, x: 10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ duration: 0.15 }}
-                          key={log.id} 
-                          className="flex items-start px-1.5 py-0.5 rounded hover:bg-white/[0.02] border-b border-white/[0.01] last:border-0 transition text-[9px] leading-tight"
-                        >
-                          {/* Minute */}
-                          <div className="w-[35px] flex-none text-slate-500 font-mono pt-0.5">
-                            {log.details.startsWith('[') ? log.details.match(/\[(.*?)\]/)?.[1] : 'Live'}
-                          </div>
+                    {globalLogs.map((log) => (
+                      <motion.div
+                        initial={{ opacity: 0, x: 10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.15 }}
+                        key={log.id} 
+                        className="flex items-start px-1.5 py-0.5 rounded hover:bg-white/[0.02] border-b border-white/[0.01] last:border-0 transition text-[9px] leading-tight"
+                      >
+                        {/* Minute */}
+                        <div className="w-[35px] flex-none text-slate-500 font-mono pt-0.5">
+                          {log.details.startsWith('[') ? log.details.match(/\[(.*?)\]/)?.[1] : 'Live'}
+                        </div>
 
-                          {/* Description */}
-                          <div className="flex-1 pl-1 text-slate-300">
-                            <span className="font-bold text-slate-400 block text-[8px]">{log.ticker}</span>
-                            {log.details.replace(/\[.*?\]\s*/, '')}
-                          </div>
+                        {/* Description */}
+                        <div className="flex-1 pl-1 text-slate-300">
+                          <span className="font-bold text-slate-400 block text-[8px]">{log.ticker}</span>
+                          {log.details.replace(/\[.*?\]\s*/, '')}
+                        </div>
 
-                          {/* Rating points */}
-                          <div className={`w-[35px] flex-none text-right font-bold font-mono pt-0.5 ${
-                            log.changeType === 'positive' ? 'text-emerald-400' :
-                            log.changeType === 'negative' ? 'text-rose-400' : 'text-slate-400'
-                          }`}>
-                            {log.change}
-                          </div>
-                        </motion.div>
-                      );
-                    })}
+                        {/* Rating points */}
+                        <div className={`w-[35px] flex-none text-right font-bold font-mono pt-0.5 ${
+                          log.changeType === 'positive' ? 'text-emerald-400' :
+                          log.changeType === 'negative' ? 'text-rose-400' : 'text-slate-400'
+                        }`}>
+                          {log.change}
+                        </div>
+                      </motion.div>
+                    ))}
                   </AnimatePresence>
                 </div>
               </div>
 
-              <div className="mt-2.5 flex items-center justify-between text-[8px] text-slate-650">
+              <div className="mt-2.5 flex items-center justify-between text-[8px] text-slate-600 shrink-0">
                 <span>⚠️ Simulated Match</span>
                 <button
                   id="clear_ticker_btn"
@@ -2275,6 +3696,7 @@ export default function App() {
             </div>
 
           </div>
+
         </section>
 
         {/* SIDE-BY-SIDE GRID: MY CARD COLLECTION LEDGER ON LEFT, TACTICAL FOOTBALL PITCH ON RIGHT */}
@@ -3075,6 +4497,123 @@ export default function App() {
                   Close
                 </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* BETTING SETTLEMENT OVERLAY MODAL */}
+      <AnimatePresence>
+        {settledBetsDisplay && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-50 p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-slate-900 border border-amber-400/30 rounded-2xl w-full max-w-xl overflow-hidden flex flex-col shadow-2xl relative animate-shimmer"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="absolute top-0 right-0 w-48 h-48 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
+              
+              {/* Header */}
+              <div className="p-5 bg-slate-950 border-b border-white/5 text-center relative">
+                <div className="w-12 h-12 rounded-full bg-amber-400/10 border border-amber-400/30 flex items-center justify-center mx-auto mb-2">
+                  <Coins className="w-6 h-6 text-amber-400 animate-bounce" />
+                </div>
+                <h3 className="text-base font-black font-display tracking-tight text-slate-100 uppercase">
+                  🏆 Match Completed & Settled
+                </h3>
+                <p className="text-[10px] font-mono text-slate-400 uppercase tracking-widest mt-1">
+                  Full-Time Speculation Report
+                </p>
+              </div>
+
+              {/* Settlement Content */}
+              <div className="p-5 space-y-3 max-h-[50vh] overflow-y-auto custom-scrollbar">
+                {settledBetsDisplay.map(bet => {
+                  const player = PLAYER_MAP[bet.playerId];
+                  const isWon = bet.status === 'won';
+                  return (
+                    <div 
+                      key={bet.id} 
+                      className={`p-3.5 rounded-xl border flex items-center justify-between transition-all ${
+                        isWon 
+                          ? 'bg-emerald-500/10 border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.05)] animate-pulse' 
+                          : 'bg-slate-950/40 border-white/5 opacity-80'
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-bold font-display text-slate-100">{player?.name}</span>
+                          <span className="text-sm leading-none">{player?.nation === 'Spain' ? '🇪🇸' : '🇦🇷'}</span>
+                        </div>
+                        <div className="text-[9px] font-mono text-slate-400 flex items-center space-x-2">
+                          <span>Speculation: <strong>{getBetMarketLabel(bet)}</strong></span>
+                          <span>•</span>
+                          <span>Outcome: <strong className={isWon ? 'text-emerald-400 font-bold' : 'text-slate-350'}>Rank #{bet.actualFinalRank}</strong></span>
+                        </div>
+                      </div>
+
+                      <div className="text-right flex flex-col items-end space-y-1">
+                        <span className={`text-[8px] font-black uppercase tracking-wider font-mono px-1.5 py-0.5 rounded shadow ${
+                          isWon 
+                            ? 'bg-emerald-400 text-slate-950 font-bold' 
+                            : 'bg-white/5 text-slate-500 border border-white/5'
+                        }`}>
+                          {isWon ? 'Won' : 'Lost'}
+                        </span>
+                        
+                        {isWon ? (
+                          <span className="text-xs font-black font-mono text-emerald-400 filter drop-shadow-[0_0_8px_rgba(52,211,153,0.3)]">
+                            Paid +${bet.payoutAmount?.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-xs font-mono text-slate-500">
+                            -${bet.betAmount.toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Total Summary Row */}
+              {(() => {
+                const totalWins = settledBetsDisplay.filter(b => b.status === 'won').reduce((sum, b) => sum + (b.payoutAmount || 0), 0);
+                const totalInvested = settledBetsDisplay.reduce((sum, b) => sum + b.betAmount, 0);
+                const netYield = totalWins - totalInvested;
+                return (
+                  <div className="p-4 bg-slate-950 border-t border-b border-white/5 flex items-center justify-between text-xs font-mono">
+                    <div className="space-y-0.5">
+                      <span className="text-slate-500 text-[10px] uppercase font-bold block">Total Speculated</span>
+                      <span className="text-slate-300 font-bold">${totalInvested.toFixed(2)}</span>
+                    </div>
+                    <div className="text-right space-y-0.5">
+                      <span className="text-slate-500 text-[10px] uppercase font-bold block">Net Yield</span>
+                      <span className={`font-black text-sm font-mono ${netYield >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {netYield >= 0 ? `+$${netYield.toFixed(2)}` : `-$${Math.abs(netYield).toFixed(2)}`}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Footer Button */}
+              <div className="p-4 bg-slate-950 flex justify-center">
+                <button
+                  onClick={() => setSettledBetsDisplay(null)}
+                  className="px-6 py-2 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-slate-950 font-black font-display text-xs uppercase tracking-wide rounded-xl shadow-lg active:scale-95 transition cursor-pointer"
+                >
+                  Collect Gains & Resume
+                </button>
+              </div>
+
             </motion.div>
           </motion.div>
         )}
